@@ -16,3 +16,8 @@ from app.pipelines.utils.utils import (
     validate_torch_device,
     get_max_memory,
 )
+
+from app.pipelines.utils.schedulers import (
+    load_scheduler_presets,
+    create_scheduler
+)
