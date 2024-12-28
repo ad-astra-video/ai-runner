@@ -395,9 +395,6 @@ func (w *Worker) AudioToText(ctx context.Context, req GenAudioToTextMultipartReq
 }
 
 func (w *Worker) LLM(ctx context.Context, req GenLLMJSONRequestBody) (interface{}, error) {
-	isStreaming := req.Stream != nil && *req.Stream
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	c, err := w.borrowContainer(ctx, "llm", *req.Model)
 	if err != nil {
 		return nil, err
@@ -410,6 +407,8 @@ func (w *Worker) LLM(ctx context.Context, req GenLLMJSONRequestBody) (interface{
 	}
 
 	slog.Info("Container borrowed successfully", "model_id", *req.Model)
+	isStreaming := req.Stream != nil && *req.Stream
+	ctx, cancel := context.WithCancel(ctx)
 
 	if isStreaming {
 		resp, err := c.Client.GenLLM(ctx, req)
