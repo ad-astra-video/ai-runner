@@ -795,8 +795,10 @@ func (w *Worker) handleStreamingResponse(ctx context.Context, c *RunnerContainer
 							slog.Error("Error unmarshaling stream data", slog.String("err", err.Error()))
 							continue
 						}
-						if total_tokens, ok := streamResp["total_tokens"]; ok {
-							totalTokens = total_tokens.(int)
+						if usage, ok := streamResp["usage"]; ok {
+							if usageTokens, ok := usage.(map[string]int); ok {
+								totalTokens = usageTokens["total_tokens"]
+							}
 						}
 
 						outputChan <- LlmStreamChunk{Chunk: "[DONE]", Done: true, TokensUsed: totalTokens}
