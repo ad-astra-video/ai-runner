@@ -780,7 +780,7 @@ func (w *Worker) handleStreamingResponse(ctx context.Context, c *RunnerContainer
 
 		scanner := bufio.NewScanner(resp.Body)
 		totalTokens := 0
-
+		lastStreamData := ""
 		for scanner.Scan() {
 			select {
 			case <-ctx.Done():
@@ -790,17 +790,21 @@ func (w *Worker) handleStreamingResponse(ctx context.Context, c *RunnerContainer
 				if strings.HasPrefix(line, "data: ") {
 					data := strings.TrimPrefix(line, "data: ")
 					if data == "[DONE]" {
+						var streamResp map[string]interface{}
+						if err := json.Unmarshal([]byte(lastStreamData), &streamResp); err != nil {
+							slog.Error("Error unmarshaling stream data", slog.String("err", err.Error()))
+							continue
+						}
+						if total_tokens, ok := streamResp["total_tokens"]; ok {
+							totalTokens = total_tokens.(int)
+						}
+
 						outputChan <- LlmStreamChunk{Chunk: "[DONE]", Done: true, TokensUsed: totalTokens}
 						return
 					}
-
-					var streamData LlmStreamChunk
-					if err := json.Unmarshal([]byte(data), &streamData); err != nil {
-						slog.Error("Error unmarshaling stream data", slog.String("err", err.Error()))
-						continue
-					}
-
-					totalTokens += streamData.TokensUsed
+					lastStreamData = data
+					totalTokens += 1 //increment token count
+					streamData := LlmStreamChunk{Chunk: data, TokensUsed: totalTokens}
 
 					select {
 					case outputChan <- streamData:
