@@ -795,15 +795,22 @@ func (w *Worker) handleStreamingResponse(ctx context.Context, c *RunnerContainer
 							slog.Error("Error unmarshaling stream data", slog.String("err", err.Error()))
 							continue
 						}
+						fmt.Printf("Parsed JSON: %+v\n", streamResp)
 						if usage, ok := streamResp["usage"]; ok {
-							if usageTokens, ok := usage.(map[string]int); ok {
-								totalTokens = usageTokens["total_tokens"]
+							fmt.Printf("Usage: %+v\n", usage)
+							if usageTokens, ok := usage.(map[string]interface{}); ok {
+								fmt.Printf("Usage: %+v\n", usage)
+								totalTokens = usageTokens["total_tokens"].(int)
+								fmt.Printf("Parsed JSON: %+v\n", totalTokens)
 							}
+						} else {
+							slog.Error("No usage data in stream response")
 						}
 
 						outputChan <- LlmStreamChunk{Chunk: "[DONE]", Done: true, TokensUsed: totalTokens}
 						return
 					}
+
 					lastStreamData = data
 					totalTokens += 1 //increment token count
 					streamData := LlmStreamChunk{Chunk: data, TokensUsed: totalTokens}
