@@ -21,6 +21,7 @@ from app.pipelines.utils import (
 from app.utils.errors import InferenceError
 from diffusers import (
     AutoPipelineForText2Image,
+    DiffusionPipeline,
     EulerDiscreteScheduler,
     StableDiffusionXLPipeline,
     UNet2DConditionModel,
@@ -57,6 +58,7 @@ class ModelName(Enum):
     REALISTIC_VISION_V6 = "SG161222/Realistic_Vision_V6.0_B1_noVAE"
     FLUX_1_SCHNELL = "black-forest-labs/FLUX.1-schnell"
     FLUX_1_DEV = "black-forest-labs/FLUX.1-dev"
+    HIDREAM_AI_I1 = "HiDream-ai/HiDream-I1" #partial name to match
 
     @classmethod
     def list(cls):
@@ -153,10 +155,28 @@ class TextToImagePipeline(Pipeline):
             # Decrease precision to preven OOM errors.
             kwargs["torch_dtype"] = torch.bfloat16
             self.ldm = LPFluxPipeline(model_id, os.environ.get("DEVICE_MAP", ""), torch_device, **kwargs)
+        elif ModelName.HIDREAM_AI_I1.value in model_id:
+            from transformers import LlamaForCausalLM, PreTrainedTokenizerFast
+            from diffusers import HiDreamImagePipeline
+            text_encoder_4 = LlamaForCausalLM.from_pretrained("neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8", 
+                                                                    output_hidden_states=True,
+                                                                    output_attentions=True,
+                                                                    return_dict_in_generate=True
+                                                                )
+            tokenizer_4 = PreTrainedTokenizerFast.from_pretrained("neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8")
+            self.ldm = HiDreamImagePipeline.from_pretrained(
+                "HiDream-ai/HiDream-I1-Full",
+                tokenizer_4=tokenizer_4,
+                text_encoder_4=text_encoder_4,
+                torch_dtype=torch.bfloat16,
+            )
+            self.ldm.enable_model_cpu_offload()
+
         else:
-            self.ldm = AutoPipelineForText2Image.from_pretrained(model_id, **kwargs).to(
+            self.ldm = DiffusionPipeline.from_pretrained(model_id, **kwargs).to(
                 torch_device
             )
+                
 
         #save the default scheduler
         self.default_scheduler = deepcopy(self.ldm.scheduler)
@@ -288,13 +308,13 @@ class TextToImagePipeline(Pipeline):
                 kwargs.pop("negative_prompt")
 
         # Allow users to specify multiple (negative) prompts using the '|' separator.
-        prompts = split_prompt(prompt, max_splits=3)
+        prompts = split_prompt(prompt, max_splits=4)
         prompt = prompts.pop("prompt")
         kwargs.update(prompts)
         neg_prompts = split_prompt(
             kwargs.pop("negative_prompt", ""),
             key_prefix="negative_prompt",
-            max_splits=3,
+            max_splits=4,
         )
         kwargs.update(neg_prompts)
 
