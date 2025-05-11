@@ -26,3 +26,45 @@ class Pipeline(ABC):
         Returns a health check object for the pipeline.
         """
         return HealthCheck(status="OK", version="undefined")
+    
+    def get_pipelines(self) -> list[dict]:
+        """
+        Get the list of pipelines available in the backend.
+        """
+        raise NotImplementedError("Pipeline should implement a get_pipelines method")
+    def refresh_pipelines(self) -> bool:
+        """
+        Refresh the list of pipelines.
+        """
+        raise NotImplementedError("Pipeline should implement a refresh_pipelines method")
+
+class Backend(ABC):
+    @abstractmethod
+    def __init__(self, **kwargs):
+        raise NotImplementedError("Backend should implement an __init__ method")
+    
+    @abstractmethod
+    def process(self, data: dict, files: dict, **kwargs) -> Any:
+        """
+        Process the input data and return the output.
+        """
+        raise NotImplementedError("Backend should implement a process method")
+    @abstractmethod
+    def get_pipelines(self) -> list[dict]:
+        """
+        Get the list of pipelines available in the backend.
+        """
+        raise NotImplementedError("Backend should implement a process method")
+    @abstractmethod
+    def setup_pipelines(self):
+        """
+        Setup the pipelines for the backend.
+        """
+        pass
+    
+    def get_health(self) -> HealthCheck:
+        """
+        Returns a health check object for the backend.
+        """
+        return HealthCheck(status="OK", version="undefined")
+    

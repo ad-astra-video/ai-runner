@@ -7,6 +7,8 @@ import re
 import psutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import requests
+from tqdm import tqdm
 
 import numpy as np
 import torch
@@ -388,3 +390,36 @@ def get_max_memory() -> MemoryInfo:
                              cpu_memory=cpu_memory, num_gpus=num_gpus)
 
     return memory_info
+
+def resumable_download(url, output_path, chunk_size=1024 * 1024):
+    headers = {}
+    mode = "ab"
+    existing_size = 0
+
+    # Check for existing partial file
+    if os.path.exists(output_path):
+        existing_size = os.path.getsize(output_path)
+        headers["Range"] = f"bytes={existing_size}-"
+        mode = "ab"
+
+    # Make request with Range header
+    response = requests.get(url, headers=headers, stream=True)
+
+    # Check if server supports resuming
+    if response.status_code not in (200, 206):
+        logger.error(f"Server does not support resuming (status {response.status_code})")
+        return
+
+    # Determine total file size
+    total_size = int(response.headers.get("Content-Length", 0)) + existing_size
+
+    with open(output_path, mode) as f, tqdm(
+        total=total_size, initial=existing_size,
+        unit="B", unit_scale=True, desc=output_path
+    ) as bar:
+        for chunk in response.iter_content(chunk_size=chunk_size):
+            if chunk:
+                f.write(chunk)
+                bar.update(len(chunk))
+
+    logger.info("Download completed.")

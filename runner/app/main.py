@@ -26,12 +26,16 @@ async def lifespan(app: FastAPI):
 
     pipeline = os.environ["PIPELINE"]
     model_id = os.environ["MODEL_ID"]
-
+    
+    #used with batch proxy
+    app.pipeline_str = pipeline
+    app.model_id_str = model_id
+    
     app.pipeline = load_pipeline(pipeline, model_id)
     app.include_router(load_route(pipeline))
 
     app.hardware_info_service.log_gpu_compute_info()
-    logger.info(f"Started up with pipeline {app.pipeline}")
+    logger.info(f"Started up with pipeline {pipeline}")
 
     runner_version=os.getenv("VERSION", "undefined")
     VERSION.labels(app="ai-runner", version=runner_version).set(1)
@@ -44,6 +48,10 @@ async def lifespan(app: FastAPI):
 
 def load_pipeline(pipeline: str, model_id: str) -> any:
     match pipeline:
+        case "batch":
+            from app.pipelines.batch import BatchPipeline
+
+            return BatchPipeline()
         case "text-to-image":
             from app.pipelines.text_to_image import TextToImagePipeline
 
@@ -94,6 +102,10 @@ def load_pipeline(pipeline: str, model_id: str) -> any:
 
 def load_route(pipeline: str) -> any:
     match pipeline:
+        case "batch":
+            from app.routes import batch
+
+            return batch.router
         case "text-to-image":
             from app.routes import text_to_image
 

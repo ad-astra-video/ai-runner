@@ -15,6 +15,7 @@ from app.pipelines.utils.utils import (
     split_prompt,
     validate_torch_device,
     get_max_memory,
+    resumable_download
 )
 
 from app.pipelines.utils.schedulers import (
