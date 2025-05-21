@@ -37,6 +37,11 @@ class Pipeline(ABC):
         Refresh the list of pipelines.
         """
         raise NotImplementedError("Pipeline should implement a refresh_pipelines method")
+    def stop_pipelines(self):
+        """
+        Stop the pipeline.
+        """
+        raise NotImplementedError("Pipeline should implement a stop_pipeline method")
 
 class Backend(ABC):
     @abstractmethod
@@ -49,19 +54,19 @@ class Backend(ABC):
         Process the input data and return the output.
         """
         raise NotImplementedError("Backend should implement a process method")
-    @abstractmethod
-    def get_pipelines(self) -> list[dict]:
-        """
-        Get the list of pipelines available in the backend.
-        """
-        raise NotImplementedError("Backend should implement a process method")
+
     @abstractmethod
     def setup_pipelines(self):
         """
         Setup the pipelines for the backend.
         """
         pass
-    
+    @abstractmethod
+    def stop_pipelines(self):
+        """
+        Stop the pipelines as needed.
+        """
+        raise NotImplementedError("Backend should implement a stop_pipelines method")
     def get_health(self) -> HealthCheck:
         """
         Returns a health check object for the backend.

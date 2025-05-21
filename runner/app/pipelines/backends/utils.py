@@ -18,20 +18,32 @@ def start_backend(backend):
     """
     Start the backend using the provided command.
     """
+    #check if running
+
     try:
         result = subprocess.run(f"supervisorctl -s unix:///tmp/supervisor.sock start {backend}", shell=True, check=True, capture_output=True, text=True)
         return result.stdout
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"failed to start backend {backend}: {e.stderr}")
 
-def create_pipeline_runner_config(pipeline_id):
+def stop_backend(backend):
+    """
+    Stop the backend using the provided command.
+    """
+    try:
+        result = subprocess.run(f"supervisorctl -s unix:///tmp/supervisor.sock stop {backend}", shell=True, check=True, capture_output=True, text=True)
+        return result.stdout
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"failed to stop backend {backend}: {e.stderr}")
+    
+def create_pipeline_runner_config(pipeline_id, port):
 
     """
     Create a pipeline runner config file.
     """
     config = """
     [program:{pipeline_id}]
-    command=/bin/bash -c 'eval "$(pyenv init -)" && eval "$(pyenv virtualenv-init -)" && pyenv activate $PIPELINE_VENV && python -u /app/workspace/main.py --disable-smart-memory --disable-cuda-malloc --listen 0.0.0.0 --port 7860'
+    command=/bin/bash -c 'eval "$(pyenv init -)" && eval "$(pyenv virtualenv-init -)" && pyenv activate $PIPELINE_VENV && python -u /app/workspace/main.py --disable-smart-memory --disable-cuda-malloc --listen 0.0.0.0 --port {port}'
     autostart=false
     startretries=0
     priority=3
@@ -39,9 +51,9 @@ def create_pipeline_runner_config(pipeline_id):
     stdout_logfile_maxbytes=0
     redirect_stderr=true
     autorestart=true
-    environment=PYTHONUNBUFFERED=1,PIPELINE_VENV={pipeline_id},PYTHONPATH=/root/.pyenv/versions/comfyui
+    environment=PYTHONUNBUFFERED=1,PIPELINE_VENV={pipeline_id},PYTHONPATH=/root/.pyenv/versions/comfyui-base
     """
-    config = config.format(pipeline_id=pipeline_id)
+    config = config.format(pipeline_id=pipeline_id, port=port)
     with open(f"/etc/supervisor/conf.d/{pipeline_id}.conf", "w") as f:
         f.write(config)
     

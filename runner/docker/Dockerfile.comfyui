@@ -34,22 +34,36 @@ RUN echo 'eval "$(pyenv init -)"' >> ~/.bashrc && \
     echo 'eval "$(pyenv virtualenv-init -)"' >> ~/.bashrc
 WORKDIR /app
 # create a virtualenv for comfyui
-RUN pyenv virtualenv $PYTHON_VERSION comfyui
+ENV PYTHONDONTWRITEBYTECODE=1
+RUN pyenv virtualenv $PYTHON_VERSION comfyui-base --system-site-packages
+RUN pyenv virtualenv $PYTHON_VERSION comfyui-playground --system-site-packages
 
-RUN eval "$(pyenv init -)" && eval "$(pyenv virtualenv-init -)" && pyenv activate comfyui && pip install --no-cache-dir --upgrade pip setuptools wheel && \
+RUN eval "$(pyenv init -)" && eval "$(pyenv virtualenv-init -)" && pyenv activate comfyui-base && pip install --no-cache-dir --upgrade pip setuptools wheel && \
   pip install --no-cache-dir torch==2.7 torchvision torchaudio transformers diffusers numpy>=1.26.4 accelerate tqdm && \
   pip install git+https://github.com/huggingface/diffusers && \
   pip install comfy-cli fastapi uvicorn httpx nvidia-ml-py==12.560.30 pynvml==12.0.0 prometheus_client>=0.21.1 GitPython
+
+RUN eval "$(pyenv init -)" && eval "$(pyenv virtualenv-init -)" && pyenv activate comfyui-playground && pip install --no-cache-dir --upgrade pip setuptools wheel && \
+  pip install --no-cache-dir torch==2.7 torchvision torchaudio transformers diffusers numpy>=1.26.4 accelerate tqdm && \
+  pip install git+https://github.com/huggingface/diffusers comfy-cli
 
 
 RUN mkdir /app/workspace
 
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git /app/workspace
-RUN git clone https://github.com/ltdrdata/ComfyUI-Manager /app/workspace/custom_nodes/ComfyUI-Manager
-RUN eval "$(pyenv init -)" && eval "$(pyenv virtualenv-init -)" && pyenv activate comfyui && pip install -r /app/workspace/requirements.txt
-RUN eval "$(pyenv init -)" && eval "$(pyenv virtualenv-init -)" && pyenv activate comfyui && pip install -r /app/workspace/custom_nodes/ComfyUI-Manager/requirements.txt
-#comfy-cli did not work because is interactive
-#RUN . /app/venv/bin/activate && echo n | comfy --workspace=/app/workspace install
+RUN git clone https://github.com/ltdrdata/ComfyUI-Manager /app/workspace/custom_nodes/ComfyUI-Manager && \
+    git clone https://github.com/rgthree/rgthree-comfy.git /app/workspace/custom_nodes/rgthree-comfy && \
+    git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git /app/workspace/custom_nodes/ComfyUI-VideoHelperSuite
+
+RUN eval "$(pyenv init -)" && eval "$(pyenv virtualenv-init -)" && pyenv activate comfyui-base && pip install -r /app/workspace/requirements.txt
+RUN eval "$(pyenv init -)" && eval "$(pyenv virtualenv-init -)" && pyenv activate comfyui-playground && pip install -r /app/workspace/requirements.txt
+RUN eval "$(pyenv init -)" && eval "$(pyenv virtualenv-init -)" && pyenv activate comfyui-base && pip install -r /app/workspace/custom_nodes/ComfyUI-Manager/requirements.txt
+RUN eval "$(pyenv init -)" && eval "$(pyenv virtualenv-init -)" && pyenv activate comfyui-playground && pip install -r /app/workspace/custom_nodes/ComfyUI-Manager/requirements.txt
+RUN eval "$(pyenv init -)" && eval "$(pyenv virtualenv-init -)" && pyenv activate comfyui-base && pip install -r /app/workspace/custom_nodes/rgthree-comfy/requirements.txt
+RUN eval "$(pyenv init -)" && eval "$(pyenv virtualenv-init -)" && pyenv activate comfyui-playground && pip install -r /app/workspace/custom_nodes/rgthree-comfy/requirements.txt
+RUN eval "$(pyenv init -)" && eval "$(pyenv virtualenv-init -)" && pyenv activate comfyui-base && pip install -r /app/workspace/custom_nodes/ComfyUI-VideoHelperSuite/requirements.txt
+RUN eval "$(pyenv init -)" && eval "$(pyenv virtualenv-init -)" && pyenv activate comfyui-playground && pip install -r /app/workspace/custom_nodes/ComfyUI-VideoHelperSuite/requirements.txt
+ENV PATH="/root/.pyenv/versions/comfyui-base/bin:$PATH"
 
 ENV PYTHONPATH=$PYENV_ROOT/versions/comfyui
 

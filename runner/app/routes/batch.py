@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-@router.get("/pipelines", response_model=Dict[str, any])
+@router.get("/pipelines", response_model=None)
 async def get_pipelines(pipeline: Pipeline = Depends(get_pipeline),
                         ) -> JSONResponse:
     """
@@ -63,13 +63,7 @@ async def refresh_pipelines(pipeline: Pipeline = Depends(get_pipeline),
     """
     try:
         # Assuming you have a function to refresh pipelines
-        success = await pipeline.refresh_pipelines()
-        if not success:
-            logger.info("Pipelines failed to refresh.")
-            return JSONResponse(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                content=http_error("Failed to refresh pipelines."),
-            )
+        await pipeline.refresh_pipelines()
         
         logger.info("Pipelines refreshed successfully.")
         return JSONResponse(
@@ -80,7 +74,29 @@ async def refresh_pipelines(pipeline: Pipeline = Depends(get_pipeline),
         logger.error(f"Error refreshing pipelines: {e}")
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content=http_error("Failed to refresh pipelines."),
+            content=http_error(f"Failed to refresh pipelines. error={e}"),
+        )
+
+@router.post("/pipelines/stop", response_model=None)
+async def stop_pipelines(pipeline: Pipeline = Depends(get_pipeline),
+                        ) -> JSONResponse:
+    """
+    Stop the pipelines.
+    """
+    try:
+        # Assuming you have a function to stop the pipeline
+        await pipeline.stop_pipelines()
+        
+        logger.info("Pipelines stopped successfully.")
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={"message": "Pipelines stopped successfully."},
+        )
+    except Exception as e:
+        logger.error(f"Error stopping pipelines: {e}")
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content=http_error(f"Failed to stop pipeline. {e}"),
         )
 
 @router.api_route("/{pipeline_name:path}", 
@@ -149,13 +165,19 @@ async def proxy(pipeline_name: str,
     #        content=http_error(f"Pipeline processing error: {e}"),
     #    )
 
+    if result is None:
+        logger.error("No result returned from backend.")
+        return JSONResponse(
+            status_code=status.HTTP,
+            content=http_error("No result returned from backend."),
+        )
     if "stream" in params:
         if params["stream"]:
             return StreamingResponse(
                 stream_generator(result),
                 media_type="text/event-stream"
             )
-    
+
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content=result

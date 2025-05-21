@@ -1,7 +1,5 @@
 import json
 import os
-import shutil
-import subprocess
 import logging
 import time
 from git import Repo
@@ -13,21 +11,35 @@ import os
 import httpx
 import asyncio
 from app.routes.utils import image_to_data_url, audio_to_data_url
-from app.pipelines.backends.utils import run_command, start_backend, create_pipeline_runner_config
+from app.pipelines.backends.utils import run_command, start_backend, stop_backend, create_pipeline_runner_config
 import io
 import sys
-
+import threading
 from PIL import Image
 
 logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.FATAL)
-
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8001")
-
 class ComfyUIBackend(Backend):
     def __init__(self):
         print("SYS.PATH:  ", sys.path)
+        #parse available ports
+        self.backend_ports = os.getenv("BACKEND_PORTS", "7861")
+        if "," in self.backend_ports:
+            self.backend_ports = self.backend_ports.split(",")
+        elif "-" in self.backend_ports:
+            self.backend_ports = self.backend_ports.split("-")
+            self.backend_ports = [str(i) for i in range(int(self.backend_ports[0]), int(self.backend_ports[1])+1)]
+        
+        self.pipeline_ports = {} #dict of pipelines and assigned ports from available backend ports
+
+        self.pipelines_lock = threading.Lock()
+        self.pipelines = {}
+        self.backend_runner_locks = {}
+        self.backend_runner_last_used = {}
+
         self.setup_pipelines()
+        
+        start_backend("comfyui-playground") #start the comfyui backend
 
     def _create_pipeline_env(self, pipeline):
         logger.info(f"Creating virtualenv for {pipeline}")
@@ -103,7 +115,7 @@ class ComfyUIBackend(Backend):
         # Extract the seed from the prompt using regex
         match = re.search(r'("seed": )(\d+)', prompt)
         if match:
-            return int(match.group(1))
+            return int(match.group(2))
         return None
     
     async def _download_result(self, url: str) -> bytes:
@@ -114,14 +126,14 @@ class ComfyUIBackend(Backend):
                 return response.content
             else:
                 raise ValueError(f"Failed to download result: {response.status_code} {response.text}")
-    
+            
     def setup_pipelines(self):
-        # This function is a placeholder for the actual pipeline setup logic.
-        # You can implement the logic to set up pipelines here.
+        self.pipelines_lock.acquire()
+                
         logger.info("Setting up pipelines...")
         # Example: await self._setup_pipeline("example_pipeline")
-        pipelines = {}
         pipelines_path = "/app/settings/pipelines"
+        pipelines_files = {}
         for filename in os.listdir(pipelines_path):
             if filename.endswith('.json') and filename.startswith("comfyui--"):
                 pipeline = filename.replace("comfyui--", "").replace(".json", "")
@@ -132,10 +144,13 @@ class ComfyUIBackend(Backend):
                     except json.JSONDecodeError as e:
                         logger.error(f"Failed to get pipeline settings, JSON is invalid {filename}: {e}")
                         
-                    pipelines[pipeline] = pipeline_settings
-                
-        for pipeline in pipelines:
-            pipeline_settings = pipelines[pipeline] 
+                    pipelines_files[pipeline] = pipeline_settings
+
+        for pipeline in pipelines_files:
+            if pipeline in self.pipelines:
+                continue
+
+            pipeline_settings = pipelines_files[pipeline] 
             
             #------------------------------
             # install nodes for the pipeline
@@ -154,12 +169,17 @@ class ComfyUIBackend(Backend):
                 for node in pipeline_settings['nodes']:
                     self._install_node(node, pipeline)
 
-                if not os.path.exists(f"/etc/supervisor/conf.d/{pipeline}.conf"):
-                    #create the pipeline runner config
-                    create_pipeline_runner_config(pipeline)
+                #create the pipeline runner config using first aviailable port
+                if len(self.backend_ports) == 0:
+                    logger.error(f"no backend ports available for {pipeline}, unable to create pipeline runner")
+                    continue
+
+                self.pipeline_ports[pipeline] = self.backend_ports.pop(0)
+                create_pipeline_runner_config(pipeline, self.pipeline_ports[pipeline])
             else:
                 #no extra nodes or requirements to install we can use the core venv
                 logger.info(f"no custom nodes found for {pipeline}, will use core comfyui environment")
+                self.pipeline_ports[pipeline] = "7860"
 
             #------------------------------
             # download models
@@ -169,46 +189,35 @@ class ComfyUIBackend(Backend):
                     model_path = model
                     model_url = pipeline_settings['models'][model]
                     self._download_model(model_url, model_path)
+            
+            #setup tracking of the pipeline
+            self.backend_runner_locks[pipeline] = asyncio.Lock()
+            self.backend_runner_last_used[pipeline] = 0
+        #release lock
+        self.pipelines_lock.release()
 
-    async def get_pipelines(self):
-        logger.info("Setting up pipelines...")
-        # Example: await self._setup_pipeline("example_pipeline")
-        pipelines = []
-        pipelines_path = "/app/settings/pipelines"
-        for filename in os.listdir(pipelines_path):
-            if filename.endswith('.json') and filename.startswith("comfyui--"):
-                pipeline = filename.replace("comfyui--", "").replace(".json", "")
-                pipeline_name, model_id = pipeline.split("--", 1)
-                model_id = model_id.replace("--", "/")
-                pipeline_json = {
-                    "pipeline": pipeline_name,
-                    "model_id": model_id
-                }
-                with open(os.path.join(pipelines_path, filename), 'r') as f:
-                    try:
-                        pipeline_settings = json.load(f)
-                    except json.JSONDecodeError as e:
-                        logger.error(f"Failed to get pipeline settings, JSON is invalid {filename}: {e}")
-                        
-                    if "pricing" in pipeline_settings:
-                        if "price_per_unit" in pipeline_settings["pricing"]:
-                            pipeline_json["price_per_unit"] = pipeline_settings["pricing"]["price_per_unit"]
-                        if "currency" in pipeline_settings["pricing"]:
-                            pipeline_json["currency"] = pipeline_settings["pricing"]["currency"]
-                        if "price_scaling" in pipeline_settings["pricing"]:
-                            pipeline_json["price_scaling"] = pipeline_settings["pricing"]["price_scaling"]
-                        else:
-                            pipeline_json["price_scaling"] = 1
-                        
-                    pipelines.append(pipeline_json)
+    async def stop_pipelines(self):
+        last_used = self.backend_runner_last_used[pipeline_id]
+        idle_timeout = 60 #default to 60 seconds idle timeout
+        for pipeline_id in self.pipelines:
+            if "keep_alive" in self.pipelines[pipeline_id]:
+                idle_timeout = int(self.pipelines[pipeline_id]["keep_alive"])
         
-        return pipelines
+            if last_used < (time.time() - idle_timeout):
+                logger.info(f"Stopping pipeline {pipeline_id}, idle longer than after {idle_timeout}")
+                #stop the backend
+                await self.backend_runner_locks[pipeline_id].acquire()
+                stop_backend(pipeline_id)
+                self.backend_runner_locks[pipeline_id].release()
     
     async def process(self, pipeline_name: str, model_id: str, params: Dict[str, any], files: Dict[str, any]):
-        # This function is a placeholder for the actual ComfyUI workflow proxying logic.
-        # You can implement the logic to handle ComfyUI-specific requests here.
-        logger.info(f"ComfyUI workflow proxying for path: {pipeline_name}")
         pipeline_id = pipeline_name + "--" + model_id.replace("/","--")
+        #update the last used time, use under lock to prevent race of stopping the backend while trying to process
+        await self.backend_runner_locks[pipeline_id].acquire()
+        self.backend_runner_last_used[pipeline_id] = time.time()
+        self.backend_runner_locks[pipeline_id].release()
+
+        logger.info(f"ComfyUI workflow proxying for path: {pipeline_name}")
         
         pipeline_settings_path = f"/app/settings/pipelines/comfyui--{pipeline_id}.json"
         if not os.path.exists(pipeline_settings_path):
@@ -220,30 +229,37 @@ class ComfyUIBackend(Backend):
             if not "prompt" in pipeline_settings:
                 raise ValueError(f"Prompt not found in pipeline settings: {pipeline_settings_path}")
         
-        #startup comfyui
-        if "nodes" in pipeline_settings:
-            start_backend(pipeline_id)
-        else:
-            start_backend("comfy_ui") #no custom nodes needed, use default environment
+        backend_url = f"http://localhost:{self.pipeline_ports[pipeline_id]}"
         
-        logger.info(f"Starting ComfyUI using custom node environment: {pipeline_id if 'nodes' in pipeline_settings else 'comfy_ui'}")
-        
-
         #client to send data to backend
         client = httpx.AsyncClient()
-
-        #wait for startup
-        while True:
-            await asyncio.sleep(1)
-            try:
-                resp = await client.get(f"{BACKEND_URL}/system_stats", timeout=2)
-                if resp.status_code == 200:
-                    break
-                logger.info("waiting for comfyui to startup...")
-            except Exception as e:
-                logger.error(f"Error connecting to ComfyUI backend: {e}")
+        backend_running = False
+        #check if backend is up, and start if not
+        try:
+            resp = await client.get(f"{backend_url}/system_stats", timeout=2)
+            if resp.status_code == 200:
+                logger.info(f"Backend already running for {pipeline_id}, using existing backend")
+                backend_running = True
+        except httpx.ConnectError as e:
+            logger.info(f"Backend not running, starting backend for {pipeline_id}: {e}")
         
+        if not backend_running:
+            if "nodes" in pipeline_settings:
+                #start the backend with the pipeline id
+                start_backend(pipeline_id)
+            else:
+                start_backend("comfyui-base") #no custom nodes needed, use default environment
 
+            #wait for startup
+            while True:
+                await asyncio.sleep(1)
+                try:
+                    resp = await client.get(f"{backend_url}/system_stats", timeout=2)
+                    if resp.status_code == 200:
+                        break
+                    logger.info("waiting for comfyui to startup...")
+                except Exception as e:
+                    logger.error(f"Error connecting to ComfyUI backend: {e}")
 
         #upload the files and add to the prompt
         if files:
@@ -257,7 +273,7 @@ class ComfyUIBackend(Backend):
                 if content_type == "image/mask":
                     upload_files = {"image": (filename, file_content, "image/png")}
                     resp = await client.post(
-                        url=f"{BACKEND_URL}/upload/mask",
+                        url=f"{backend_url}/upload/mask",
                         data=upload_data,
                         files=upload_files,
                     )
@@ -267,7 +283,7 @@ class ComfyUIBackend(Backend):
                 elif content_type == "image/png":
                     upload_files = {"image": (filename, file_content, "image/png")}
                     resp = await client.post(
-                        url=f"{BACKEND_URL}/upload/image",
+                        url=f"{backend_url}/upload/image",
                         data=upload_data,
                         files=upload_files,
                     )
@@ -285,7 +301,7 @@ class ComfyUIBackend(Backend):
         logger.debug(f"Prompt with data: {prompt_with_data}")
         #queue the prompt
         resp = await client.post(
-            url=f"{BACKEND_URL}/prompt",
+            url=f"{backend_url}/prompt",
             json={"prompt":json.loads(prompt_with_data)},
             timeout=None  # Optional: disable timeout for SSE
         )
@@ -301,7 +317,7 @@ class ComfyUIBackend(Backend):
         while True:
             await asyncio.sleep(0.5)
             status = await client.get(
-                url=f"{BACKEND_URL}/history/{prompt_id}",
+                url=f"{backend_url}/history/{prompt_id}",
                 timeout=None  # Optional: disable timeout for SSE
             )
 
@@ -331,28 +347,28 @@ class ComfyUIBackend(Backend):
         #download the output files and return
         combined_output = []
         outputs = prompt_result.get("outputs", {})
-        seed = self._extract_seed_from_prompt(str(prompt_result.get("prompt", {})))
+        print(prompt_result.get("prompt", {}))
+        seed = self._extract_seed_from_prompt(json.dumps(prompt_result.get("prompt", {})))
         
         for output_node in outputs:
             for output_type in outputs[output_node]:
                 if output_type == "images" or output_type == "audio":
                     for result in outputs[output_node][output_type]:
-                        result = await client.get(f"{BACKEND_URL}/view?filename={result['filename']}&subfolder={result['subfolder']}&type={result['type']}")
+                        result = await client.get(f"{backend_url}/view?filename={result['filename']}&subfolder={result['subfolder']}&type={result['type']}")
                         if result.status_code != 200:
                             raise ValueError(f"Failed to download result: {result.text}")
                         
                         result_bytes = io.BytesIO(result.content)
                         if output_type == "images":
                             pil_img = Image.open(result_bytes)
-                            combined_output.append({"url": image_to_data_url(pil_img), "seed": seed, "nsfw": "unknown"})
+                            combined_output.append({"url": image_to_data_url(pil_img), "seed": seed})
                         elif output_type == "audio":
-                            combined_output.append({"url": audio_to_data_url(result_bytes), "seed": seed, "nsfw": "unknown"})
+                            combined_output.append({"url": audio_to_data_url(result_bytes)})
+                        elif output_type == "json":
+                            combined_output.append({"text": result.content})        
 
+        return combined_output
         
-        if pipeline_name == "text-to-image":
-            return {"images": combined_output}
-        else:
-            return combined_output
 
 
     
